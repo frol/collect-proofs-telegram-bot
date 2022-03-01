@@ -12,7 +12,14 @@ use thiserror::Error;
 type MyDialogue = Dialogue<State, RedisStorage<Json>>;
 type StorageError = <RedisStorage<Json> as Storage<State>>::Error;
 
-const FORWARD_REPORTS_TO_CHAT_ID: i64 = -701411482;
+const FORWARD_REPORTS_TO_CHAT_ID: i64 = -1001648966128;
+
+const HELP_TEXT: &'static str = r#"Миру нам всім!
+
+Цей бот збирає відео та фото фіксації наслідків агресії РФ.
+
+Наразі бот має лише одну команду:
+/add - Додати докази (відео та фото фіксації) 📷"#;
 
 #[derive(Debug, Error)]
 enum Error {
@@ -43,12 +50,12 @@ impl Default for State {
 }
 
 #[derive(BotCommand)]
-#[command(rename = "lowercase", description = "These commands are supported:")]
+#[command(rename = "lowercase", description = "Допустимі команди для бота:")]
 pub enum Command {
-    #[command(description = "get your number.")]
-    Get,
-    #[command(description = "reset your number.")]
-    Reset,
+    #[command(description = "Почніть роботу з ботом")]
+    Start,
+    #[command(description = "Додати матеріали про нові руйнування")]
+    Add,
 }
 #[tokio::main]
 async fn main() {
@@ -88,10 +95,10 @@ async fn handle_start(
     msg: Message,
     dialogue: MyDialogue,
 ) -> anyhow::Result<()> {
+    println!("{:#?}", msg);
     if !msg.chat.is_private() {
         return Ok(());
     }
-    println!("{:#?}", msg);
     match msg.contact() {
         Some(contact) => {
             if contact.user_id.map(|user_id| i64::from(user_id)) != Some(msg.chat.id) {
@@ -112,7 +119,7 @@ async fn handle_start(
                 .await?;
             bot.send_message(
                 msg.chat.id,
-                format!("Ваш номер {} підтверджено. Надсилайте нам відео та фото фіксації руйнуваннь в наслідок агресії РФ. В комментарі зазначте район (не треба вказувати точну адресу!)", contact.phone_number),
+                format!("Ваш номер {} підтверджено. Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ. В комментарі зазначте район (не треба вказувати точну адресу!)", contact.phone_number),
             ).reply_markup(teloxide::types::KeyboardRemove::new())
             .await?;
         }
@@ -137,8 +144,23 @@ async fn handle_verified(
         teloxide::types::Contact,
         Option<chrono::DateTime<chrono::Utc>>,
     ),
-    //me: Me,
+    me: Me,
 ) -> anyhow::Result<()> {
+    if let Some(text_msg) = msg.text() {
+        let bot_name = me.user.username.unwrap();
+
+        match Command::parse(text_msg, bot_name) {
+            Ok(Command::Start) => {
+                bot.send_message(msg.chat.id, HELP_TEXT).await?;
+                return Ok(());
+            }
+            Ok(Command::Add) => {
+                bot.send_message(msg.chat.id, "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ. В комментарі зазначте район (не треба вказувати точну адресу!)").await?;
+                return Ok(());
+            }
+            Err(_) => {}
+        }
+    }
     println!("{:?}: {:#?}", contact, msg);
 
     /*
@@ -165,7 +187,7 @@ async fn handle_verified(
             last_post: Some(chrono::Utc::now()),
         })
         .await?;
-    bot.send_message(msg.chat.id, "Ми отримали інформацію! Слава Україні!")
+    bot.send_message(msg.chat.id, "Ми отримали інформацію! Слава Україні! Щоб додати ще, відправте /add")
         .reply_to_message_id(msg.id)
         .await?;
 
