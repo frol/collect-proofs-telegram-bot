@@ -36,10 +36,20 @@ pub enum State {
     #[handler(handle_start)]
     Start,
 
-    #[handler(handle_verified)]
-    Verified {
+    #[handler(handle_ready_to_receive_media)]
+    ReadyToReceiveMedia { contact: teloxide::types::Contact },
+
+    #[handler(handle_ready_to_receive_comment)]
+    ReadyToReceiveComment {
         contact: teloxide::types::Contact,
-        last_post: Option<chrono::DateTime<chrono::Utc>>,
+        media_msg_ids: Vec<i32>,
+    },
+
+    #[handler(handle_awaiting_confirmation)]
+    AwaitingConfirmation {
+        contact: teloxide::types::Contact,
+        media_msg_ids: Vec<i32>,
+        comment: String,
     },
 }
 
@@ -56,6 +66,8 @@ pub enum Command {
     Start,
     #[command(description = "Додати матеріали про нові руйнування")]
     Add,
+    #[command(description = "Почати знов")]
+    Reset,
 }
 #[tokio::main]
 async fn main() {
@@ -95,7 +107,7 @@ async fn handle_start(
     msg: Message,
     dialogue: MyDialogue,
 ) -> anyhow::Result<()> {
-    println!("{:#?}", msg);
+    log::info!(target: "start", "{:#?}", msg);
     if !msg.chat.is_private() {
         return Ok(());
     }
@@ -112,9 +124,8 @@ async fn handle_start(
                 return Ok(());
             }
             dialogue
-                .update(State::Verified {
+                .update(State::ReadyToReceiveMedia {
                     contact: contact.clone(),
-                    last_post: None,
                 })
                 .await?;
             bot.send_message(
@@ -136,14 +147,75 @@ async fn handle_start(
     Ok(())
 }
 
-async fn handle_verified(
+async fn handle_ready_to_receive_media(
     bot: AutoSend<Bot>,
     msg: Message,
     dialogue: MyDialogue,
-    (contact, last_post): (
-        teloxide::types::Contact,
-        Option<chrono::DateTime<chrono::Utc>>,
-    ),
+    (contact,): (teloxide::types::Contact,),
+    me: Me,
+) -> anyhow::Result<()> {
+    if let Some(text_msg) = msg.text() {
+        let bot_name = me.user.username.unwrap();
+
+        match Command::parse(text_msg, bot_name) {
+            Ok(Command::Start) => {
+                bot.send_message(msg.chat.id, HELP_TEXT).await?;
+                return Ok(());
+            }
+            Ok(Command::Add | Command::Reset) => {
+                bot.send_message(
+                    msg.chat.id,
+                    "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ.",
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(_) => {}
+        }
+    }
+    log::info!(target: "ready_to_receive_media", "{:?}: {:#?}", contact, msg);
+
+    /*
+    if let Some(last_post) = last_post {
+        if chrono::Utc::now().signed_duration_since(last_post) < chrono::Duration::minutes(1) {
+            bot.send_message(msg.chat.id, "Не треба відправляти повідомлення частіше ніш раз на хвилину. Слава Україні!").reply_to_message_id(msg.id).await?;
+            return Ok(());
+        }
+    }
+    */
+
+    match msg.kind {
+        teloxide::types::MessageKind::Common(teloxide::types::MessageCommon {
+            media_kind:
+                teloxide::types::MediaKind::Video(teloxide::types::MediaVideo { .. })
+                | teloxide::types::MediaKind::Photo(teloxide::types::MediaPhoto { .. }),
+            ..
+        }) => {
+            dialogue
+                .update(State::ReadyToReceiveComment {
+                    contact: contact.clone(),
+                    media_msg_ids: vec![msg.id],
+                })
+                .await?;
+
+            bot.send_message(msg.chat.id, "Відправте текстове повідомлення з комментарем з зазначенням району (не треба вказувати точну адресу!)")
+                .reply_to_message_id(msg.id)
+                .await?;
+        }
+        _ => {
+            bot.send_message(msg.chat.id, "Відправляйте нам лише фото або відео.")
+                .reply_to_message_id(msg.id)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_ready_to_receive_comment(
+    bot: AutoSend<Bot>,
+    msg: Message,
+    dialogue: MyDialogue,
+    (contact, mut media_msg_ids): (teloxide::types::Contact, Vec<i32>),
     me: Me,
 ) -> anyhow::Result<()> {
     if let Some(text_msg) = msg.text() {
@@ -155,13 +227,28 @@ async fn handle_verified(
                 return Ok(());
             }
             Ok(Command::Add) => {
-                bot.send_message(msg.chat.id, "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ. В комментарі зазначте район (не треба вказувати точну адресу!)").await?;
+                bot.send_message(
+                    msg.chat.id,
+                    "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ.",
+                )
+                .await?;
+                return Ok(());
+            }
+            Ok(Command::Reset) => {
+                bot.send_message(
+                    msg.chat.id,
+                    "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ.",
+                )
+                .await?;
+                dialogue
+                    .update(State::ReadyToReceiveMedia { contact })
+                    .await?;
                 return Ok(());
             }
             Err(_) => {}
         }
     }
-    println!("{:?}: {:#?}", contact, msg);
+    log::info!(target: "read_to_receive_comment", "{:?}: {:#?}", contact, msg);
 
     /*
     if let Some(last_post) = last_post {
@@ -172,24 +259,150 @@ async fn handle_verified(
     }
     */
 
-    let forwarded_msg = bot
-        .forward_message(FORWARD_REPORTS_TO_CHAT_ID, msg.chat.id, msg.id)
-        .await?;
-    bot.send_message(
-        FORWARD_REPORTS_TO_CHAT_ID,
-        format!("Reported by {:?}", contact),
-    )
-    .reply_to_message_id(forwarded_msg.id)
-    .await?;
-    dialogue
-        .update(State::Verified {
-            contact,
-            last_post: Some(chrono::Utc::now()),
-        })
-        .await?;
-    bot.send_message(msg.chat.id, "Ми отримали інформацію! Слава Україні! Щоб додати ще, відправте /add")
-        .reply_to_message_id(msg.id)
-        .await?;
+    match msg.kind {
+        teloxide::types::MessageKind::Common(teloxide::types::MessageCommon {
+            media_kind: teloxide::types::MediaKind::Video(_) | teloxide::types::MediaKind::Photo(_),
+            ..
+        }) => {
+            media_msg_ids.push(msg.id);
+            dialogue
+                .update(State::ReadyToReceiveComment {
+                    contact: contact.clone(),
+                    media_msg_ids,
+                })
+                .await?;
+
+            bot.send_message(msg.chat.id, "Відправте текстове повідомлення з комментарем з зазначенням району (не треба вказувати точну адресу!)")
+                .reply_to_message_id(msg.id)
+                .await?;
+        }
+        teloxide::types::MessageKind::Common(teloxide::types::MessageCommon {
+            media_kind: teloxide::types::MediaKind::Text(teloxide::types::MediaText { text, .. }),
+            ..
+        }) => {
+            dialogue
+                .update(State::AwaitingConfirmation {
+                    contact: contact.clone(),
+                    media_msg_ids,
+                    comment: text,
+                })
+                .await?;
+
+            bot.send_message(
+                msg.chat.id,
+                "Відправити додані фото/відео та ваш комментар на перевірку?",
+            )
+            .reply_to_message_id(msg.id)
+            .reply_markup(teloxide::types::KeyboardMarkup::new(vec![vec![
+                teloxide::types::KeyboardButton::new("Так"),
+                teloxide::types::KeyboardButton::new("Ні, почати знов"),
+            ]]))
+            .await?;
+        }
+        _ => {
+            bot.send_message(
+                msg.chat.id,
+                "Відправляйте нам лише фото або відео або коментар текстовим повідомленням.",
+            )
+            .reply_to_message_id(msg.id)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_awaiting_confirmation(
+    bot: AutoSend<Bot>,
+    msg: Message,
+    dialogue: MyDialogue,
+    (contact, media_msg_ids, comment): (teloxide::types::Contact, Vec<i32>, String),
+    me: Me,
+) -> anyhow::Result<()> {
+    if let Some(text_msg) = msg.text() {
+        let bot_name = me.user.username.unwrap();
+
+        match Command::parse(text_msg, bot_name) {
+            Ok(Command::Start) => {
+                bot.send_message(msg.chat.id, HELP_TEXT).await?;
+                return Ok(());
+            }
+            Ok(Command::Add) => {
+                bot.send_message(
+                    msg.chat.id,
+                    "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ.",
+                )
+                .await?;
+                return Ok(());
+            }
+            Ok(Command::Reset) => {
+                bot.send_message(
+                    msg.chat.id,
+                    "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ.",
+                )
+                .await?;
+                dialogue
+                    .update(State::ReadyToReceiveMedia { contact })
+                    .await?;
+                return Ok(());
+            }
+            Err(_) => {}
+        }
+    }
+    log::info!(target: "awaiting_for_confirmation", "{:?}: {:#?}", contact, msg);
+
+    /*
+    if let Some(last_post) = last_post {
+        if chrono::Utc::now().signed_duration_since(last_post) < chrono::Duration::minutes(1) {
+            bot.send_message(msg.chat.id, "Не треба відправляти повідомлення частіше ніш раз на хвилину. Слава Україні!").reply_to_message_id(msg.id).await?;
+            return Ok(());
+        }
+    }
+    */
+
+    match msg.text() {
+        Some("Так") => {
+            bot.send_message(
+                FORWARD_REPORTS_TO_CHAT_ID,
+                format!("Reported by {:?}:\n{}", contact, comment),
+            )
+            .await?;
+            for media_msg_id in media_msg_ids {
+                bot.forward_message(FORWARD_REPORTS_TO_CHAT_ID, msg.chat.id, media_msg_id)
+                    .await?;
+            }
+
+            dialogue
+                .update(State::ReadyToReceiveMedia { contact })
+                .await?;
+
+            bot.send_message(
+                msg.chat.id,
+                "Ми отримали інформацію! Слава Україні! Щоб додати ще, відправте /add",
+            )
+            .reply_to_message_id(msg.id)
+            .reply_markup(teloxide::types::KeyboardRemove::new())
+            .await?;
+        }
+
+        Some("Ні, почати знов") => {
+            dialogue
+                .update(State::ReadyToReceiveMedia { contact })
+                .await?;
+            bot.send_message(
+                msg.chat.id,
+                "Надсилайте нам відео та фото фіксації руйнуваннь внаслідок агресії РФ.",
+            )
+            .reply_to_message_id(msg.id)
+            .reply_markup(teloxide::types::KeyboardRemove::new())
+            .await?;
+        }
+
+        _ => {
+            bot.send_message(msg.chat.id, "Відправте \"Так\" чи \"Ні, почати знов\"")
+                .reply_to_message_id(msg.id)
+                .await?;
+        }
+    }
 
     Ok(())
 }
