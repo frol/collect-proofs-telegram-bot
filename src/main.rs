@@ -107,7 +107,7 @@ async fn handle_start(
     msg: Message,
     dialogue: MyDialogue,
 ) -> anyhow::Result<()> {
-    log::info!(target: "start", "{:#?}", msg);
+    log::info!("start: {:#?}", msg);
     if !msg.chat.is_private() {
         return Ok(());
     }
@@ -173,7 +173,7 @@ async fn handle_ready_to_receive_media(
             Err(_) => {}
         }
     }
-    log::info!(target: "ready_to_receive_media", "{:?}: {:#?}", contact, msg);
+    log::info!("ready_to_receive_media: {:?}: {:#?}", contact, msg);
 
     /*
     if let Some(last_post) = last_post {
@@ -248,7 +248,7 @@ async fn handle_ready_to_receive_comment(
             Err(_) => {}
         }
     }
-    log::info!(target: "read_to_receive_comment", "{:?}: {:#?}", contact, msg);
+    log::info!("read_to_receive_comment: {:?}: {:#?}", contact, msg);
 
     /*
     if let Some(last_post) = last_post {
@@ -294,7 +294,7 @@ async fn handle_ready_to_receive_comment(
             )
             .reply_to_message_id(msg.id)
             .reply_markup(teloxide::types::KeyboardMarkup::new(vec![vec![
-                teloxide::types::KeyboardButton::new("Так"),
+                teloxide::types::KeyboardButton::new("Так, відправте мої фото/відео на перевірку"),
                 teloxide::types::KeyboardButton::new("Ні, почати знов"),
             ]]))
             .await?;
@@ -348,7 +348,7 @@ async fn handle_awaiting_confirmation(
             Err(_) => {}
         }
     }
-    log::info!(target: "awaiting_for_confirmation", "{:?}: {:#?}", contact, msg);
+    log::info!("awaiting_for_confirmation: {:?}: {:#?}", contact, msg);
 
     /*
     if let Some(last_post) = last_post {
@@ -360,7 +360,7 @@ async fn handle_awaiting_confirmation(
     */
 
     match msg.text() {
-        Some("Так") => {
+        Some("Так, відправте мої фото/відео на перевірку") => {
             bot.send_message(
                 FORWARD_REPORTS_TO_CHAT_ID,
                 format!("Reported by {:?}:\n{}", contact, comment),
@@ -398,9 +398,12 @@ async fn handle_awaiting_confirmation(
         }
 
         _ => {
-            bot.send_message(msg.chat.id, "Відправте \"Так\" чи \"Ні, почати знов\"")
-                .reply_to_message_id(msg.id)
-                .await?;
+            bot.send_message(
+                msg.chat.id,
+                "Відправте \"Так, відправте мої фото/відео на перевірку\" чи \"Ні, почати знов\"",
+            )
+            .reply_to_message_id(msg.id)
+            .await?;
         }
     }
 
