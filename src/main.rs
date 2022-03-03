@@ -1,9 +1,9 @@
 use teloxide::{
     dispatching2::dialogue::{serializer::Json, RedisStorage, Storage},
     macros::DialogueState,
-    payloads::{SendContact, SendMessageSetters},
+    payloads::SendMessageSetters,
     prelude2::*,
-    types::{Contact, Me},
+    types::Me,
     utils::command::BotCommand,
     RequestError,
 };
@@ -14,7 +14,7 @@ type StorageError = <RedisStorage<Json> as Storage<State>>::Error;
 
 const FORWARD_REPORTS_TO_CHAT_ID: i64 = -1001648966128;
 
-const HELP_TEXT: &'static str = r#"Миру нам всім!
+const HELP_TEXT: &str = r#"Миру нам всім!
 
 Цей бот збирає відео та фото фіксації наслідків агресії РФ.
 
@@ -113,7 +113,7 @@ async fn handle_start(
     }
     match msg.contact() {
         Some(contact) => {
-            if contact.user_id.map(|user_id| i64::from(user_id)) != Some(msg.chat.id) {
+            if contact.user_id.map(i64::from) != Some(msg.chat.id) {
                 bot.send_message(msg.chat.id, "Відправте свій контакт.")
                     .reply_markup(request_phone_number_confirmation_keyboard())
                     .await?;
